@@ -1,37 +1,92 @@
 # USTORE 测试用例
 
-本目录提供围绕 openGauss USTORE 存储引擎的**可执行 SQL 测试用例**，按主题拆分，可在 psql 中逐个执行或作为回归脚本串行执行。
+本目录提供 USTORE 的黑盒回归、真并发、崩溃恢复和白盒故障注入测试。
+基础用例中的预期结果均通过断言校验，任一失败会返回非零退出码。
 
-## 运行前提
-- 目标环境：openGauss（含 USTORE、UBtree、undo 子系统）的可用实例。
-- 建表采用 `with (storage_type=ustore)`；或 `SET enable_default_ustore_table=on` 后默认建表。
-- 部分用例（并行并发、白盒故障注入、undo 系统视图）对构建/参数有额外要求，已在文件头注明：
-  - `08_concurrency_locking.sql`：需要能开多个 session（psql 下建议使用 `\parallel` 或独立连接）。
-  - `12_fault_injection_whitebox.sql`：需 `--enable-cassert` + 启用 WHITEBOX（`ENABLE_WHITEBOX`）的内部构建。
-  - `11_undo_space_views.sql`：依赖 `gs_undo_*` 系统函数（openGauss 企业/社区版均提供）。
+## 目录结构
 
-## 示例执行
-```bash
-gsql -d postgres -f tests/regression/01_ddl_ustore_table.sql
-# 或一次性运行全部
-for f in tests/regression/*.sql; do echo "== $f =="; gsql -d postgres -f "$f"; done
+```text
+tests/
+├── harness/                  # 公共断言函数
+├── regression/               # SQL 黑盒回归
+├── concurrency/              # 多会话并发执行器
+├── recovery/                 # 崩溃恢复执行器
+├── whitebox/                 # 白盒故障注入框架
+└── run_regression.sh         # 回归测试入口
 ```
 
+## 基础回归
+
+运行环境需要 openGauss 实例，并包含 USTORE、UBtree 和 UNDO 子系统。
+`11_undo_space_views.sql` 还要求目标版本提供 `gs_undo_*` 系统函数。
+
+```bash
+GSQL=gsql DB=postgres tests/run_regression.sh
+```
+
+也可以单独执行某个用例：
+
+```bash
+gsql -X -d postgres -v ON_ERROR_STOP=1 \
+  -f tests/regression/01_ddl_ustore_table.sql
+```
+
+`12_fault_injection_whitebox.sql` 默认跳过，只有外部执行器已设置白盒桩时才应运行。
+
 ## 用例清单
-| 文件 | 主题 | 对应源码关注点 |
+
+| 文件 | 场景 | 主要验收 |
 | --- | --- | --- |
-| 01_ddl_ustore_table.sql | USTORE 建表/索引/DML 前置 | reloptions、UBtree 默认索引 |
-| 02_crud_insert.sql | 插入正确性与自增/OID | `RelationPutUTuple`、MultiInsert |
-| 03_crud_update_inplace_vs_moved.sql | 就地更新 vs 行迁移 | in-place 更新、UNDO_UPDATE |
-| 04_crud_delete_vacuum.sql | 删除 + 页清理/VACUUM | `UHeapDelete`、`UHeapPagePrune` |
-| 05_mvcc_visibility.sql | 多版本可见性隔离级别 | `UHeapTupleSatisfiesVisibility` |
-| 06_transaction_rollback.sql | 回滚与 undo 应用 | `VerifyAndDoUndoActions` |
-| 07_subtransaction.sql | 子事务 / savepoint | 子事务 undo、部分回滚 |
-| 08_concurrency_locking.sql | 并发更新与行锁 | `UHeapLockTuple`、TUPLESATISFIES_UPDATE |
-| 09_index_ubtree.sql | UBtree 索引 | `ubtinsert/search/ubtrecycle` |
-| 10_toast_bigdata.sql | 大字段 TOAST | `knl_ut uptoaster.cpp` |
-| 11_undo_space_views.sql | undo 空间与视图 | `gs_undo_*` |
-| 12_fault_injection_whitebox.sql | 白盒故障注入（构建受限） | `knl_whitebox_test.h` 桩 |
+| `01_ddl_ustore_table.sql` | USTORE 建表、默认表、UBtree、ALTER/TRUNCATE | reloptions、索引 access method、DDL 后可用性 |
+| `02_crud_insert.sql` | 单行、MultiInsert、INSERT SELECT、重复键 | 行数、主键冲突 SQLSTATE、回滚 |
+| `03_crud_update_inplace_vs_moved.sql` | 等宽/增宽/键列更新、回滚 | 新旧值、旧键消失、行数不变 |
+| `04_crud_delete_vacuum.sql` | 删除、空间复用、VACUUM、回滚 | 可见行数、删除恢复 |
+| `05_mvcc_visibility.sql` | 单会话 MVCC、RR、serializable read-only | 自身可见性、回滚快照、无幽灵行 |
+| `06_transaction_rollback.sql` | 整事务、SAVEPOINT、多版本 undo 链 | 精确恢复旧值 |
+| `07_subtransaction.sql` | 异常子事务和嵌套子事务 | 只撤销子块，外层修改保留 |
+| `08_concurrency_locking.sql` | 锁语法和重复更新冒烟 | 50 次更新不丢失 |
+| `09_index_ubtree.sql` | 唯一索引、键更新、索引/顺序扫描一致性 | 唯一冲突、扫描结果完全一致 |
+| `10_toast_bigdata.sql` | TOAST 插入、更新、回滚、删除 | TOAST relation、长度、数据完整 |
+| `11_undo_space_views.sql` | `gs_undo_*` 可读性和 DML 后状态 | 系统函数返回非空、checkpoint 后数据正确 |
+| `12_fault_injection_whitebox.sql` | 故障注入后的数据一致性 | 表、索引、行值均保持完整 |
 
-> 说明：用例按 openGauss SQL 语法编写，部分带 `-- ...` 断言语义的 CHECK 采用"可重跑的幂等脚本 + DO 块断言"，运行后以无 SQL 错误为准。
+## 专项执行
 
+真并发锁等待和超时：
+
+```bash
+GSQL=gsql DB=postgres tests/concurrency/08_run.sh
+```
+
+该执行器使用两个独立连接，验证 `lock_timeout` 的 SQLSTATE `55P03`，
+以及锁释放后重试不会产生丢失更新。
+
+崩溃恢复：
+
+```bash
+ALLOW_DESTRUCTIVE_RECOVERY=1 \
+PGDATA=/path/to/opengauss/data \
+GSQL=gsql \
+GS_CTL=gs_ctl \
+tests/recovery/13_run_crash_recovery.sh
+```
+
+该执行器只能在一次性实例上运行，会使用 `gs_ctl stop -m immediate` 模拟崩溃。
+
+白盒故障注入：
+
+```bash
+GSQL=gsql DB=postgres \
+tests/whitebox/run_injection_case.sh /path/to/case
+```
+
+case 目录需要提供 `setup.sql`、`inject_and_trigger.sql`、`verify.sql`，
+具体桩语法由目标 openGauss 构建决定。
+
+## 约定
+
+- 所有文件使用 `ON_ERROR_STOP=1`。
+- 结果由 `pg_temp.ustore_assert_*` 校验，不依赖人工阅读查询输出。
+- 预期错误必须校验 SQLSTATE。
+- 破坏性恢复测试要求 `ALLOW_DESTRUCTIVE_RECOVERY=1`。
+- in-place/moved、页槽和 UBtree 回收等页级判定需要目标构建的 pagehack 或白盒能力。

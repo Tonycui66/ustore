@@ -13,8 +13,11 @@
 - [测试点与测试策略](docs/ustore_test_strategy.md)
   - 六层测试分层、覆盖矩阵（逐条映射到源码）
   - 环境前置、质量属性、故障注入清单
+- [测试场景与验收标准](docs/ustore_test_scenarios.md)
+  - P0/P1/P2 场景、断言原则、专项测试分组
 - [测试用例](tests/README.md)
-  - `tests/regression/` 下 12 个可执行 SQL 用例（DDL、CRUD、MVCC、事务、并发、索引、TOAST、undo、白盒）
+  - 12 个带断言的 SQL 用例（DDL、CRUD、MVCC、事务、索引、TOAST、undo、白盒）
+  - 多会话并发、崩溃恢复和白盒故障注入执行器
 
 ## 快速开始
 ```bash
@@ -24,10 +27,17 @@ open docs/ustore_engine_overview.md
 # 测试用例入口
 open tests/README.md
 
-# 在 openGauss 环境执行（需 USTORE）
-gsql -d postgres -f tests/regression/01_ddl_ustore_table.sql
+# 在 openGauss 环境执行基础回归（需 USTORE）
+GSQL=gsql DB=postgres tests/run_regression.sh
+
+# 真并发专项
+tests/concurrency/08_run.sh
+
+# 崩溃恢复专项（只在一次性实例执行）
+ALLOW_DESTRUCTIVE_RECOVERY=1 PGDATA=/path/to/data \
+  tests/recovery/13_run_crash_recovery.sh
 ```
 
 ## 说明
 - 行为基于 openGauss master 源码；个别运行时细节（GUC 名、`gs_undo_*` 列名、ORID 能力）以目标版本为准。
-- `tests/regression/` 中并发/白盒用例已在文件头注明对构建与多 session 的要求。
+- 基础用例使用 SQL 断言；并发、崩溃恢复和白盒用例必须使用对应的独立执行器。

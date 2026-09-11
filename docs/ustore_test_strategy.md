@@ -2,6 +2,8 @@
 
 > 本文从源码（`opengauss-mirror/openGauss-server` master）出发，梳理 USTORE 的测试维度和策略，
 > 并把每个测试点对应到相关源码/白盒桩/系统函数，为编写可执行的测试用例提供清单与优先级。
+>
+> 对应落地场景和验收标准见 [`ustore_test_scenarios.md`](ustore_test_scenarios.md)。
 
 ---
 
